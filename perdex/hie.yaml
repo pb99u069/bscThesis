@@ -1,0 +1,8 @@
+cradle:
+    cabal:
+      - path: "./src"
+        component: "lib:mydex"
+      - path: "./app/uniswap-pab.hs"
+        component: "exe:uniswap-pab"
+      - path: "./app/uniswap-client.hs"
+        component: "exe:uniswap-client"

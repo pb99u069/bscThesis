@@ -1,0 +1,635 @@
+\documentclass[a4paper,twoside,openright,11pt]{report}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage[labelfont=bf,labelsep=period]{caption}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\graphicspath{ {./images/} }
+\usepackage{numbertabbing}
+\usepackage{times}
+\usepackage{url}
+\usepackage{xspace}
+\usepackage{hyperref}
+
+\floatstyle{ruled}
+\newfloat{algo}{htbp}{algo}
+\floatname{algo}{Algorithm}
+
+%%% fill in your data here %%%
+\newcommand{\thesistitle}{A concurrent DEX on Cardano}
+\newcommand{\thesisauthor}{Peter Brühwiler}
+\newcommand{\thesisauthororigin}{Bern, Switzerland}
+\newcommand{\thesisleiter}{Prof.\ Christian Cachin}
+\newcommand{\thesisasst}{Alice Assistant}
+\newcommand{\thesisurl}{http://crypto.unibe.ch/}
+\newcommand{\thesissubtitle}{A Novel Approach to a New Idea}
+\newcommand{\thesisdate}{31. December 9999}
+
+
+\begin{document}
+
+\pagenumbering{roman}
+
+\begin{titlepage}  
+  \thispagestyle{empty}
+
+  \begin{center}  
+    \begin{figure}[t]  
+      \center{\includegraphics[scale=0.5]{UNI_Bern.png}}
+      \vspace{1in}     
+    \end{figure}
+    
+    {\bfseries\Huge \thesistitle \\[2mm]
+      \Large \thesissubtitle}\\
+    \vspace{1.5cm}
+
+    {\bfseries\LARGE Bachelor Thesis}\\
+    \vspace{1.5cm}
+    
+    {\Large \thesisauthor\\[2mm]
+      from\\[2mm]
+      \thesisauthororigin}\\
+    \vspace{1.5cm}
+
+    {\Large Faculty of Science, University of Bern}\\
+    \vspace{1.5cm}
+
+    {\Large \thesisdate}\\
+    \vspace{1.5cm}
+
+    \vspace*{\fill}
+    {\Large
+      \thesisleiter\\
+      \thesisasst\\
+      Cryptology and Data Security Group\\
+      Institute of Computer Science\\
+      University of Bern, Switzerland\\}
+  \end{center}
+\end{titlepage}
+
+
+\chapter*{\centering Abstract}
+\begin{quote}\noindent
+    Like Bitcoin, Cardano is an Unspent Transaction Output (UTxO) based blockchain. But while on the Bitcoin Blockchain UTxOs are basically spent by signing them with a Private Key, Cardano allows arbitrary validation logic by introducing the Haskell based Plutus Scripting Language to define spending conditions. Simply taking a smart contract from Ethereum and translating it 'from Solidity to Plutus' is not always advisable though. In this paper I show how the 'concurrency problem' can arise when building a decentralized exchange (DEX) on Cardano based on the Automated Market Maker (AMM) model - being concurrent meaning in this context that the DEX can be used simultaneously by multiple users. Multiple teams in the Cardano ecosystem are solving or have already solved the 'concurrency issue' by the time of writing this paper, but no concurrent AMM-style DEX has gone live on the Cardano mainnet yet.    
+\end{quote}
+
+\cleardoublepage
+
+
+\tableofcontents
+
+
+\cleardoublepage
+
+\pagenumbering{arabic}
+
+
+\chapter{Introduction}
+\label{ch:intro}
+
+This year, the 'Alonzo' hard fork brought smart contract capability to the Cardano blockchain. First in August on various testnets and then in September on the mainnet. A few days before the mainnet hard fork, the 'concurreny issue' became a hot topic in some cryptocurrency social media channels. The reason: Minswap, one of the teams building a DEX for the Cardano Blockchain, had gone live on the public testnet with a test version of their application and most people wanting to try it out just got this message:
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.35]{minswap_errormessage}
+\caption{UTxO missing..}
+\end{figure}
+In a \href{https://medium.com/minswap/minswap-testnet-reflections-64b01c5e7c45}{blogpost}, Minswap appologized for the bad user experience but also argued that testnets exist to improve unfinished products: "Minswap has known about the concurrency challenge since we first began building on Cardano over 6 months ago. It’s an issue that every competent team and development lab building DeFi protocols on Cardano must overcome. It’s not a fundamental flaw, but is simply a design challenge that must be addressed." Sundaeswap, another project on Cardano, described the 'concurrency issue' faced by a UTxO-style DEX already earlier, in their first \href{https://sundaeswap.finance/papers/SundaeSwap-2021-06-01-Fundamentals.pdf}{whitepaper} published on June 1. "Because any given eUTXO can only be spent once, as part of one transaction, it appears as if only one swap can happen per block", they explained. "On the Cardano blockchain, there is roughly one block every 20 seconds. This would be abysmal throughput for a decentralized exchange."
+
+\paragraph{The extended UTxO model}
+
+To understand the 'concurrency issue' it is important to understand Cardanos UTxOs architecture. UTxOs are easiest explained with the cash analogy. While users of account based blockchains like f.ex. Ethereum control an account with their private key whose value can be in- or decreased, users of the Cardano blockchain just control a bunch of UTxOs, all containing a certain value. As the first letter in 'UTxO' says, these outputs are 'unspent'. like a physical banknote in a wallet. And in the same way as a banknote can be spent, these UTxOs can only be spent as a whole. So, a crypto wallet holding a UTxO worth 100 Ada (Cardanos main currency) wanting to pay 20 Ada to a seller, has to put the whole amount into the transaction. The transaction will then have two outputs that can be used as inputs in later transactions: a UTxO worth 20 Ada for the seller and a UTxO worth 80 Ada going back to the buyer. Summarizing the result of the buy transaction: One UTxO has been spent (and will be unusable in the future) and two new UTxOs have been created (and will be usable by the the seller/buyer once the block recording the transaction is included in the ledger state). 
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.35]{utxo_account_model}
+\caption{difference between utxo and accounting style}
+\end{figure}
+
+Figure 1.2 shows the difference between the UTxO and account style model: the first manipulates the ledger state through 'destruction and creation' without changing the state of variables, the second changes the ledger state through manipulation of global (account) variables. The reason why both these models exist is explained by the authors of \href{https://iohk.io/en/research/library/papers/the-extended-utxo-model/}{this paper} as follows: "Ethereum chose the account model explicitly to facilitate more expressive smart contracts. On the other hand, Bitcoin chose UTXO also for good reasons, including that its semantic model stays simple in a complex concurrent and distributed computing environment. This raises the question of whether it is possible to have expressive smart contracts, while keeping the semantic simplicity of the UTXO model." The answer given to this question by Cardano is the eUTxO, the extended UTxO. There a four major changes that transform a UTxO into a eUTxO:  
+
+\begin{itemize}
+
+\item The first extension is that the UTxO is associated to a validator script (respectively its hash value) instead of to a Public Key. The validator is basically a function that must evaluate to True to unlock UTxOs sitting at its hash address.
+
+\item The second change is that the UTxO contains a 'Datum', which allows a contract to carry some state. To be more precise: currently, a UTxO just contains the hash of the Datum and the spending transaction must provide the actual Datum value.   
+
+\item The third change is the 'Redeemer': To spend a UTxO, this Redeemer must be passed as a parameter into the validator script of the UTxO. The Redeemer typically describes an action. F.ex.: If a UTxO contains in it's Datum an exchange rate as state, a Redeemer 'update' could be defined that triggers a certain part of the validation logic in the validator. So maybe updating the state of the exchange rate is only possible for the party having created the original UTxO while other actions like 'use' can be performed by arbitrary users.
+
+\item The last change is that the validator receives some information about the transaction that is being validated. This information, called the context, is passed into the validator as an additional argument of type Context. As the authors of the EUTxO paper explain: "The information supplied in the context enables the validator to enforce much stronger conditions than is possible with a bare UTXO model — in particular, it can inspect the outputs of the current transaction, which is essential for ensuring contract continuity." In above mentioned example this contract continuity would be: The UTxO containing the exchange rate can only be spent in a transaction if in the same transaction a new UTxO also containing the exchange rate and associated to the same script address is produced. If this validation rule is not enforced, the exchange rate state and thus the contract continuity could get 'lost'. 
+Figure 1.3 shows the most important component of the ScriptContext, the TxInfo. It contains, as mentioned above, the list of outputs of the transactioon, and also f.ex. the amount of fees paid for the transaction (txInfoFee) or the amount of new tokens minted (txInfoImint)  
+
+\end{itemize}
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.65]{context_txinfo}
+\caption{context of a transaction}
+\end{figure}
+Figure 1.4 shows a bitcoin style spending transaction, and spending UTxOs from private addresses on Cardano works this way as well. Figure 1.5 shows the spending of a EUTxO 'sitting' at a (validator) script address. For simplicity reasons I will not differentiate between UTxOs and eUTxOs and just call them UTxOs.
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{utxo}
+\caption{context of a transaction}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{images/utxo_extended}
+\caption{context of a transaction}
+\end{figure}
+
+\paragraph{UTxOs representing a liquidity pool}
+
+Combining the fact that the state of a smart contract is contained in a UTxO sitting at the contract address and the fact that a UTxO can only be spent once brings us back to the core of the 'concurrency issue': What if two users simultaneously want to include the exchange rate contained in the UTxO mentioned in the previous example in their transactions? Only one will get the desired input while the other one will have to try building the transaction again one block later. The 'concurrency issue' is easily solved in this case though: Instead of just one UTxO, the oracle can produce (and update) multiple exchange rate UTxOs for multiple users, all containing the same exchange rate information.
+But if the smart contract UTxO contains a liquidity pool instead of an easily reproducible exchange rate, the 'concurrency issue' becomes more difficult to solve. This is the case for the AMM-DEX that I will describe in detail below. For now just this: An AMM-DEX smart contract UTxO contains two currencies that form a liquidity pool together. How liquidity pools work is described f.ex. \href{https://www.gemini.com/cryptopedia/what-is-a-liquidity-pool-crypto-market-liquidity}{here}. One key takeaway from the article is that slippage - the percentage change in the effective price paid in a trade relative to the expected price given by the state of the liquidity pool before the trade - is a big concern in markets/pools with low liquidity. So even though in theory it's possible to split an AMM UTxO in multiple AMM UTxOs, each containing a fraction of the two currencies from the original UTxO, this is a bad idea because of higher slippage. 
+
+Given this contention problem over a liquidity pool UTxO, a DEX on Cardano could try to avoid exposing such a global state altogether and instead implement the orderbook pattern that is traditionally used by centralized exchanges.   
+
+\paragraph{orderbook pattern}
+
+An order book is basically a list of open buy and sell offers for specific amounts of currency and every buy order needs to be matched with a sell order. IOG describes the order book pattern and Cardano in \href{https://playground.plutus.iohkdev.io/doc/plutus/explanations/order-book-pattern.html}{this explainer}, as a natural fit: "Every order is a single UTXO, and matching a set of orders means building a transaction that spends the relevant UTXOs. The UTXOs are script UTXOs with a known address and a datum value that holds the quoted price and some bookkeeping information (for example, an address to pay the money to, and an expiration date). The currency value locked in the UTXO is the “inverse” of the order."
+
+While there were lots of discussions in Cardano forums about the development progress of different AMM-DEX projects, the until then little known \href{https://docs.muesliswap.com/}{Muesliswap DEX} went live on the mainnet at the end of November using the order book pattern. Three weeks later, it had already approached the number of 50'000 transactions with its backbone smart contract, making it the most used contract in the still short Cardano 'Alonzo' era network history.
+
+As described by IOG, a UTxO paid to the Muesliswap contract contains in the Datum the name and quantity of the coin the user wants to buy (see Figure 1.6). As value, the UTxO contains the amount of the currency the user wants to pay for his buy offer. If there is an 'inverse' offer UTxO, an independent matchmaker can match the two UTxOs by fullfilling the conditions given by the validator script in Figure 1.7. The central function in the script being 'correctFull': It checks that that the transaction contains outputs to the two public keys defined in the OrderDatum of the order UTxOs. The CancelOrder Redeemer comes with only one condition: the party spending the script UTxO must be the same as having created it. This means that as long as no one else includes the order in a swap transaction, the order can be cancelled by the owner.    
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{muesliswap_datum}
+\caption{context of a transaction}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{muesliswap_validator}
+\caption{context of a transaction}
+\end{figure} 
+
+"An order book model for an exchange, which on Ethereum is disastrously expensive to maintain and update, seems more fundamentally suited to Cardano", argues also Sundaeswap, another DEX builder on Cardano. But they see a potential liquidity problem, meaning that no trades can be made because sell and buy offers are too far apart. "Most pools on decentralized exchanges are thinly traded", they argue in \href{https://sundaeswap.finance/posts/sundaeswap-scalability}{this blogpost}. "Uniswap, for example, has over 8,000 trading pairs. If we rank the pools by trading volume and examine #30, we see only a couple of trades per hour. Consequently,we felt that a pure orderbook without the support of an AMM would be a poor fit."
+
+\paragraph{Automated Market Maker}
+
+Automated market makers (AMM) aim to solve the problem of illiquid markets by incentivizing users themselves to provide liquidity for a share of trading fees. The bigger the liquidity, the smaller is the slippage as mentioned above. But even with low liquidity, trading is always possible whereas an order book would maybe find no matches at all. Protocols like Bancor or Uniswap and basically all DEX on account style blockchains use automated market makers.
+
+\chapter{Perdex-Design}
+
+Given the two main designs described above, I decided to implement a DEX that allows concurrent swaps based on the AMM model. As (non-concurrent) basis for the project, I took the already existing DEX presented in \href{https://github.com/input-output-hk/plutus-pioneer-program/tree/main/code/week10}{lesson nr 10} of the Plutus Pioneer Program organized by the co-founders of Cardano, Input Output Global (IOG). 
+The functioning of the DEX is summarized in Figure 4.2. Tx2 describes the creation of a liquidity Pool with currencies A and B. The DEX lets an arbitrary user create such a liqudity pool - which is, as described above, technically just a UTxO sitting at the pool script address.
+How exactly this UTxO is 'sitting' at the PoolAB scipt address may need some further clarification. The PoolAB UTxO could, in the widest sense, be called a smart contract. The term smart contract however is misleading when it comes to Cardano.
+
+..as Cardano Founder Charles Hoskinson suggested..  
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.35]{programmable_validators}
+\caption{Charles about naming stuff}
+\end{figure}
+
+So, 'PoolAB' is better described as a UTxO controlled by a programmable validator and having as address the hash value of the very same programmable validator. Bob can spend the PoolAB UTxO by fulfilling the logic given by the validator script. The most important part of the PoolAB validation logic being that during the spending transaction (Tx3), a new UTxO must be created at the pool address and that the amounts of Currency A and B contained in this new UTxO must be high enough so that their product is bigger then the product of the amounts of A and B in the old Pool UTxO. 
+The validation logic follows the \href{https://docs.uniswap.org/protocol/V1/introduction}{Uniswap V1 protocol} which basically states that the product of currency A and currency B must slightly increase during a Swap, the increased value representing fees for the liquidity providers.
+In this concrete example, The product A x B in the UTxO is 1'000 x 2' 000 = 2'000'000 before the execution of Tx3. After Tx3, which adds 100A to the pool and removes 181B from the pool, the product in the new UTxO is 1'100 x 1'819 = 2'000'900.
+So, Bob submits Tx3 with - as inputs - the PoolAB UTxO and a UTxO from his own wallet containing 100A. These 100A 'flow' into the new PoolAB UTxO which in turn allows to decrease the amount of CurrencyB in the same UTxO by 181B. 
+
+Tx4 and Tx5 in figure 4.1 add respectively remove liquidity from the PoolAB, Tx6 closes the liquidity pool (under the condidtion that nobody except the user executing the transaction has any liquidity left in the pool)   
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.35]{Swap}
+\caption{Creation (Tx2), use (Tx3), manipulation (Tx4, Tx5) and closure (Tx6) of a liquidity pool}
+\end{figure}
+
+The 'concurrency issue' in this DEX is that only one user can spend the PoolAB UTxO. Of course, the validation logic forces him to create a new UTxO containing the updated state for later users, but this new PoolAB UTxO is only available once the block containing Bobs transaction is added to the blockchain. This limits the PoolAB usage to one swap per block, with Cardano having a block interval of about 20 seconds at the moment.
+
+\chapter{Reserve Contract}
+To bring concurrency into this system, an additional layer in front of Tx3 can be introduced, which I will call reservation layer in this paper. Thanks to this layer, users don't interact directly with the Swap state and thus with the UTxO sitting at the address of the Pool validator anymore. Instead, a batcher combines swap orders from several users into one transaction.
+This Idea was first presented by Meld in summer, the schema is described in Figure 3.1. Same as in Tx3 in Figure 2.2, the 'Apply' transaction takes as input the State (called PoolAB in Figure 2.2). But instead of Bobs private UTxO, there are now several inputs, representing the swap orders.  
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.5]{meld_swap}
+\caption{Applying a middle layer that allows batching reservations}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.5]{meld_swap}
+\caption{Applying a middle layer that allows batching reservations}
+\end{figure}
+
+The right part of Figure 3.1 shows the inputs needed for an 'Apply' transaction and Figure 3.2 shows how these inputs are produced in earlier blocks. In Block 2, Reserve 1 is spent to create Step 1; in Block 3, Reserve 3 is spent to create Step 3; in Block 4, Step 1 and Step 3 together with Reserve 2 and State from Block 1 are spent. 
+
+In the reservation layer (left part of Figure 3.1), users can spend Reserve UTxOs and convert them into Steps (as done in Block 2 and Block 3 in Figure 3.2). In my DEX and so from now on I will call the 'Reserve' a unused reserve UTxO and the 'Step' a used reserve UTxO.
+
+It is important to note that the batcher cannot include only used reserve UTxOs in the transaction but must also include the unused reserve UTxOs. This makes sure that no reservations are left out of the transaction and thus makes the swap transaction deterministic. This idea was presented by Meld in a Blogpost this Summer: (https://medium.com/meld-labs/concurrent-deterministic-batching-on-the-utxo-ledger-99040f809706). As they write, 'the validation rule of Apply requires c corresponding reserve and step UTXOs as inputs. This disallows the transaction from omitting any reserved steps from any user.' This architecture can lead to inefficiencies if a lot of reserve UTxO are not used repeatedly. I addressed this problem by making the number N of Reserve UTxOs variable with a simple mechanism that I will describe later in the paper.
+
+So as described above, a reserve UTxO can either be used or unused. This state is encoded in the Datum of the UTxO, called ReserveDatum:
+
+code here..
+
+The Datum of the reserve UTxOs in Block 1 in Figure 3.2 is 'Unused' while the reserve UTxO produced by the transaction in Block 2 has the Datum 'Used'. Depending on the state of the Reserve UTxO, different actions are possible. These possible actions are checked by the reserve validator and defined by the ReserveRedeemer:
+
+code here..
+
+As the Reserve validator script below shows, a Reserve UTxO in the 'Unused' state can either be reserved, included or destroyed. A Reserve UTxO in the 'Used' state can be retrieved or included. When a new pool is created, a fixed number of Reserve UTxOs must be created in the same transaction and they are all in the 'Unused' state. after having been used and included in a swap, the state of all the Reserve UTxOs is 'Unused' again. The last two conditions are not set by the reserve validator but by the swap validator that i will describe in a later chapter. Back to the reserve validator which looks like this:
+
+\begin{verbatim}
+mkReserveValidator :: Coin ReserveState -> Coin PoolState -> ReserveDatum -> ReserveRedeemer -> ScriptContext -> Bool
+mkReserveValidator rs ps reserveDatum reserveRedeemer ctx =
+    case reserveDatum of
+        (Unused lp) -> case reserveRedeemer of
+            Reserve ->
+                outputContainsFee &&
+                outputHasToken &&
+                lp == getLiquidityPool outputDatum
+            Include ->
+                poolStateCoinIncluded
+        (Used lp pkh) -> case reserveRedeemer of
+            Retrieve ->
+                (Validation.txSignedBy info pkh) &&
+                outputHasToken                   &&
+                outputStateUnused outputDatum    &&
+                lp == getLiquidityPool outputDatum
+            Include ->
+                poolStateCoinIncluded
+            Destroy -> 
+                (Validation.txSignedBy info pkh)
+\end{verbatim}
+
+In the following paragraphs I describe the different redeemer actions one by one.
+
+\paragraph{Reserve}
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=1.0]{reserve_def}
+\caption{Creation of a Reserve UTxO}
+\end{figure}
+
+To Swap A against B, a user creates a used reserve UTxO containing the amount of A he wants to swap and the hash of his Public Key so that the party performing the swap knows to what address to pay the swapped amount of B. This is the 'Reserve' action described in Figure 3.2, and the transaction containing it and described in Figure 3.3 must satisfy the following conditions given by the validator (lines 6 to 9):
+\begin{itemize}
+\item outputContainsFee: The Fee in Ada must be part of the Value of the output reserve UTxO. During the swap transaction, this fee will be paid to the wallet of the user performing the swap
+\item correct liquidity pool: Because all Reserve UTxOs from all existing liquidity pools have the same Reserve Address, The lp value in the ReserveDatum associates them with the correct liquidity pool. So, to make a reservation for PoolAB, the user needs to attach a datum with the lp value 'AB'.
+\item correct number of reserve tokens N: the datum also keeps track of the number of reserve UTxOs currently in circulation. By making a reservation, the user must not change this number. The number of reserve UTxOs only changes during the swap transaction: It increases if the reserve UTxOs are heavily used and decreases if the Reserve UTxOs are not much used.
+\item It is maybe noteworthy that the Reserve validator doesn't force the user to create a 'Used' Reserve UTxO or to provide his public key in the ReserveDatum, as by not doing so it would be to his own disadvantage. 
+The number is fixed at creation and then depends on an algorithm: Calculate appropriate N in swap validation (use list, put the value for the nuber of used utxos in the current round in and take the tail out, then calculate average which is the new N) and accordingly in offchaincode. also, mint/burn r accordingly the nuber of used utxos in the current round in and take the tail out, then calculate average which is the new N) and accordingly in offchaincode. also, mint/burn r accordingly
+\item outputHasToken: Every Reserve UTxO contains a ReserveCoin in it's value. N of these Coins are minted when the pool is created and burned when the pool is closed. Coins to identify UTxOs are very common in Smart Contracts on Cardano. The reason is that validation only takes place when a UTxO is spent. The creation of a UTxO at a contract address on the other hand comes with no restrictions. So nothing can stop a user from creating additional Reserve UTxOs for a certain pool. But having a potentially infinite number of Reserve UTxOs  while the swap transaction is based on a fixed number of Reserve UTxOs. So, instead of collecting all the Reserve UTxOs, the swap transaction collects all the Reserve UTxOs containing a ReserveCoin.
+
+  
+\begin{verbatim}
+ownOutput :: TxOut
+ownOutput = case [ o | o <- getContinuingOutputs ctx ] of
+    [o] -> o
+    _   -> traceError "expected only one Reserve output"
+
+outputHasToken :: Bool
+outputHasToken = isUnity (txOutValue ownOutput) rs
+\end{verbatim}
+The first function inspects the transaction context for outputs to the same script address as the address of the UTxO currently being validated (the reserve script address in this case). The second function checks if the discovered output contains the ReserveCoin (rs).  
+\end{itemize}
+
+
+\paragraph{Retrieve}
+
+The validation conditions for the 'Retrieve' action are very simple: The reserve UTxO must be in the 'used' state, and the public key hash in the datum must be the one from the users wallet performing the retrieve action. This makes sure that only the creator of a reservation can retrieve it. Additionally, the user is forced to create a new 'Unused' Reserve UTxO containing the ReserveToken so that no reserve UTxOs are missing for the next Swap. 
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=1.0]{retrieve_def}
+\caption{Cancellation of a Reserve UTxO}
+\end{figure}
+
+
+
+\paragraph{Include}
+
+The most important action is obviously 'Include'. It can be performed wether the UTxO is 'Used' or 'Unused' and comes with only one condition: poolStateCoinIncluded. In the same way that a ReserveToken identifies a Reserve UTxO, a poolStateCoin identifies a Pool UTxO. So by making sure that the poolStateCoin is in the transaction, we also guarantee that the Pool UTxO is spent in the transaction. And the Pool UTxO can only be spent by following its validation logic. So by requiring the presence of the poolStateCoin, the Reserve validator delegates the 'Include' validation to the Swap validator.
+
+This makes sense for efficiency reasons. As iog writes in a \href{https://iohk.io/en/blog/posts/2021/11/16/architecting-dapps-on-the-eutxo-ledger/}{blog post}: 'When adopting such a batching pattern, one should bear in mind that, whenever N orders sitting at the request script are consumed within a single transaction, the request script will be executed N times on transaction submission.' Meanwhile, the Swap validator script is only executed once. I will describe this logic in the next chapter.
+
+\paragraph{Destroy}
+
+The fourth and last possible action for a Reserve UTxO is 'Destroy'. This can only be done if the UniswapCoin is present. So again, this is a case of delegation of validation logic, this time by making sure that a 'PoolFactory' UTxO containing the UniswapCoin is spent in the same transaction.
+Above, I used the term 'Pool validation logic' when talking about the spending of the 'Pool' UTxO while in the present context I'm talking about the spending of a 'PoolFactory' UTxO. Under the hood though, there is only one validator script for both of them. The Factory and the Pool UTxOs are instances sitting the same address, differentiated by their Datum (either being 'Factory' with a list of liquidity pools or 'Pool' with a specific liquidity pool and an amount of liquidity coins). Because the 'PoolFactory' instance contains the UniswapCoin, it can be spent with the Redeemers 'Create' or 'Close' as shown in the code below. For a UTxO not containing this coin, validateCreate, validateCloseFactory and validateClosePool would not validate. In the rest of the paper I will call UTxOs sitting at the address of the mkUniswapValidator script Uniswap UTxOs and the validator itself Uniswap validator for simplicity reasons. 
+
+So, coming back to the Reserve UTxOs: given the delegation of validation, they can and must be destroyed - respectively their ReserveCoins must be burned - when a Pool is closed. This is important, because otherwise there would exist lingering ReserveCoins that could be used to create additional Reserve UTxOs. A second condition for destroying reserve UTxOs given by the Uniswap validator is that the state given by the ReserveDatum must be unused. If used reservations would be destroyed, the user that made the reservations would loose his money.
+
+\chapter{Swap validation}
+
+After having described the reservation layer, I'm coming now to the second layer, called the 'Apply' transaction in Figure 3.1. As already mentioned, the (used and unused) reserve UTxOs must be included in this transaction with the redeemer 'Include'. And as also mentioned, the validation logic is delegated to the spending of the PoolAB UTxO through the 'poolStateCoinIncluded' function. Figure 4.1 shows all the inputs and outputs of this transaction.
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.6]{swapWithoutSwapContract}
+\caption{Swap with 2 Used and 1 unused Reservation UTxO}
+\end{figure} 
+
+As the figure shows, the PoolAB UTxO is spent with the 'Swap' Redeemer. This triggers the 'validateSwap' function on the third line of the validator script below:
+
+mkUniswapValidator :: Uniswap
+475                    -> Coin PoolState
+476                    -> Coin ReserveState
+477                    -> UniswapDatum
+478                    -> UniswapAction
+479                    -> ScriptContext
+480                    -> Bool
+481 mkUniswapValidator us c r (Factory lps) (Create lp) ctx = validateCreate us c r lps lp ctx
+482 mkUniswapValidator _  c r (Pool lp _)   Swap        ctx = validateSwap r lp c ctx
+483 mkUniswapValidator us c r (Factory lps) Close       ctx = validateCloseFactory us c r lps ctx
+484 mkUniswapValidator us _ _ (Pool _  _)   Close       ctx = validateClosePool us ctx
+485 mkUniswapValidator _  c _ (Pool lp a)   Remove      ctx = validateRemove c lp a ctx
+486 mkUniswapValidator _  c _ (Pool lp a)   Add         ctx = validateAdd c lp a ctx
+487 mkUniswapValidator _  _ _ _             _           _   = False
+
+To evaluate to True, validateSwap must fulfill the following conditions:
+
+validateSwap :: Coin ReserveState -> LiquidityPool -> Coin PoolState -> ScriptContext -> Bool
+ 62 validateSwap r lp c ctx =
+ 63     -- checkReserveConditions: everyone who created a reserve UTxO must get its share. The amounts are given by percentageForReserveOutputs mutiplied by totalValA and totalValB.. so roughly, the validator mu
+ 64     allClientsReceiveCoins                                                              &&
+ 65     traceIfFalse "reserve UTxOs in Output missing" allReserveOutputsPresent             &&
+ 66     traceIfFalse "reserve UTxOs in Input missing" allReserveInputsPresent               &&
+ 67     checkSwap oldA oldB newA newB                                                       &&
+ 68     traceIfFalse "expected pool state token to be present in input" (isUnity inVal c)   &&
+ 69     traceIfFalse "expected pool state token to be present in output" (isUnity outVal c) &&
+ 70     traceIfFalse "did not expect Uniswap minting" noUniswapMinting
+
+allReserveInputsPresent: This condition makes sure that all the reservations - whether they are 'Used' or 'Unused' - are included in the swap transaction. The function gets the correct amount of reserve UTxOs from the Datum of any of the reserve UTxOs.
+
+allReserveOutputsPresent: Part of the swap validation is a mechanism to determine the number N of Reserve UTxOs for the next reservation round. This is done by looking at the ratio r of the used to the total number of reserve UTxOs. If r is above 0.7, an additional ReserveCoin is minted and included (in an additional Reserve UTxO) in the transaction output. If the ratio is below 0.3 and there are more then 3 reserve UTxOs in the transaction input, a ReserveCoin is burned. the allReserveOutputsPresent function checks that the transaction output contains exactly newNrReserveTokens.
+
+newNrReserveTokens :: Integer
+ 95     newNrReserveTokens
+ 96         | (((length usedReserveInputs) * 1000000) `divide` (length inputsWithReserveToken)) >= 700000 = oldNrReserveTokens + 1
+ 97         | (((length usedReserveInputs) * 1000000) `divide` (length inputsWithReserveToken)) <= 300000 = max 3 (oldNrReserveTokens - 1)
+ 98         | otherwise           
+
+\paragraph{allClientsReceiveCoins}
+
+This function makes sure that everyone that made a reservations receives the correct amount out of the swap transaction. 
+
+allClientsReceiveCoins = valuesToPay == valuesPaid
+
+valuesPaid is easy to get by observing the transaction context. it is a list of all the payments to all the PublicKeys observed in the transaction.
+
+valuesToPay is more difficult to construct. The goal for this function is to be deterministic, so that the party building the swap transaction cannot manipulate it. A manipulation could be done for example by first applying all the sell reservations of currencyA to the liquidity pool and thus lowering the relative value of A. Then, the swap executor could first apply his own reservation for buying A before all the others, thus getting currency A for lower price.
+
+Meld talks about maybe taking a timestamp during Reservation.
+
+In my implementation though, the reservations are not applied to the liquidity pool one by one. Instead, the first step is to take the difference of the total inputs of A and B, TotalCurrencyA * r - TotalCurrencyB. r is the ratio B/A given by the state of the liquidity pool and so TotalCurrencyA * r is the value of CurrencyA expressed in terms of CurrencyB. 
+The second step is to apply only TotalCurrencyA * r - TotalCurrencyB as CurrencyA input to the liquidity pool if the difference is positive. Otherwise, TotalCurrencyB - TotalCurrencyA * r is applied as CurrencyB.
+
+The following function returns the two amounts A and B for the liquidity pool input, the second amount being 0 in both cases. 
+
+amountForSwapInput :: Integer -> (Amount A, Amount B) -> (Amount A, Amount B)
+480 amountForSwapInput r (a,b)
+481     | unAmount a * r > unAmount b * 1000000 = (Amount (unAmount a - (unAmount b * 1000000) `divide` r), Amount 0)
+482     | otherwise                             = (Amount 0, Amount (unAmount b - (unAmount a * r) `divide` 1000000))
+
+So only either CurrencyA or CurrencyB is applied to the liquidity pool (or neither, in case of TotalCurrencyA * r = TotalCurrencyB). If CurrencyA is applied, that means that the total value of all the CurrencyA inputs (in terms of CurrencyB) is bigger then the total value of all the CurrencyB inputs. So the users that made reservations to sell CurrencyA will get all the CurrencyB inputs plus the result of the swap. The users that made reservations to sell CurrencyB just get the amount TotalCurrencyB / r from the TotalCurrencyA input.
+
+The result of this logic are the following functions: 
+
+ -- these amounts depend on wether newA - oldA is positive or negative, for details see docs
+178     totalValA' :: Amount A
+179     totalValA'
+180         | newA - oldA > 0 = Amount (((unAmount totalValB) * 1000000) `divide` ratio)               -- this means that Coin A was put into swap
+181         | otherwise       = (oldA - newA) + totalValA -- this means that Coin B was put in the swap and the output of that swap is added here. 
+182 
+183     totalValB' :: Amount B
+184     totalValB'
+185         | newA - oldA > 0 =  (oldB - newB) + totalValB
+186         | otherwise       = Amount (((unAmount totalValA) * ratio) `divide` 1000000)
+
+totalValA' is the amount that will be distributed between the users swapping CurrencyB for CurrencyA and totalValB' is the amount that will be distributed between the users swapping CurrencyA for CurrencyB. oldA, newA, oldB and newB are the values in the liquidity pool before and after the swap. 
+
+In the transaction shown in Figure 4.1, totalValA * r == totalValB. The exchange rate r = B/A given by 1000A and 2000B is 2, so the 100 A are worth 200 B. This means that the inputs can be swapped directly. The suppliers (in this case only one) of the 100 A get the 200 B and the suppliers of the 200 B get the 100 A. The PoolAB UTxO must of course be included in the transaction anyway as it provides the exchange rate r and as Reserve UTxOs can only be spent in the presence of a PoolStateCoin.
+
+Once the total amount of A and B in the output is known, it must be made sure that the providers of CurrencyA get the correct share of the output of CurrencyB and vice versa. This is done by calculating the percentage of the total input of one currency provided by a user and guaranteeing that he gets the same percentage of the output of the other currency.
+
+For example: If User1 supplies 10 percent of currencyB in the input, he must get 10 percent of the total output of currencyA.
+
+code: 
+
+One problem with this implementation was that the equality condition valuesToPay == valuesPaid doesn't hold if the party performing the Swap transaction himself made swap reservations. This is because the value paid to the public key of the party performing the swap includes also the fees paid by the other users. To solve the problem, reservations from a public key performing the swap are filterd out before the 'allClientsReceiveCoins' function is run.
+
+This follows a logic that is often seen in Plutus validator scripts: They guarantee certain conditions for all third party users paying money to the script address. Once these conditions are satisfied by a transaction and there is still money left to spend, this 'excess' amount goes automatically to the wallet of the party submitting the transaction. In the case of the swap transaction this means that once every user gets a UTxO with the percentage of the output he is entitled to, to party performing the swap can take all the rest (including the fees). If he doesn't agree with this output, he simply doesn't submit the transaction.     
+
+\paragraph{submitting a transaction}
+
+Offline code reflects the online code. 
+To construct the values: I filter out the ones paid to own PubKey. Wouldn't add up otherwise. This is no problem, as the Wallet does the magic of paying everything that is left over to own wallet..
+
+need to filter the list for same PubKeys: otherwise a problem..
+
+must make sure that no amount bigger than oldA/N and oldB/N. Otherwise the whole shit could be blocked.
+
+ 
+
+How much decentralized?
+
+Graphic from Sundaeswap:
+
+their model less decentralized, but no need for unused Reserve UTxOs.
+
+Who does the batching? Sundaeswap does it with Scoopers, they get the program to do it from Sundaeswap. And the OnChain-Code will somehow check that they are allowed to do that. There is no such restriction in my code, so everyone can execute the Swap. My OffChain-Code does basically this: It makes sure that all the conditions given by the validator are met and builds the transactions. These Functions are basically passed to the PAB that acts as a server. It can be activated via HTTP requests. 
+The reward are the fees, that one gets by executing all of that..
+
+There are critical voices that call Sundaeswap centralized because of the scoopers, and also the 'open' variant is in a way not completely decentralized, as there is the need of someone executing (even if it can be the person that made the reservation). But: thats the way cardano works. OnChain only validation. A smart contract never jumps into action onitself. Charles himself:
+
+\begin{figure}[h]
+\centering
+\includegraphics[scale=0.35]{programmable_validators}
+\caption{Charles about naming stuff}
+\end{figure}
+
+
+\chapter{further development}
+
+A different solution: multiple state utxos, problem is the loss of liquidity.
+
+problem: if a utxo is being consumed for reservation, swap in the same block would fail. Solution with alternating reserve/swap. Advantage of Cardano: no transaction fees if the utxo is missing, because transaction already refused by offChain code.
+
+MaladexPaper..
+going one step further: {https://iohk.io/en/blog/posts/2021/11/16/architecting-dapps-on-the-eutxo-ledger/}{working with tokens} instead of with UTxOs. The advantage of course: No validation code is running. Maladex is doing this, not much information out yet.
+
+very important, John Woods about Reference Datum, not necessary to consume the utxo anymore.. https://www.youtube.com/watch?v=_JNK4eDZFMA
+
+Hydra. L2
+
+
+\chapter{Worth it?}
+
+Either a resource is present when building the transaction and then it succeeds, or the resource isn't even there and then the transaction already fails locally and doesn't even get submitted to the blockchain.
+
+Validators are fully determinable: their outcome depends entirely on the transaction it bears. (i.e., predictable fees). They are somewhat similar to the concept of "pure functions" in functional programming. validators are implicitly referenced by hash functions before use, and these are exposed when activated.
+
+The transaction logic is simplified, as each UTXO can only be consumed once and as a whole, which makes transaction verification much simpler.
+
+Failed transactions: When validation logic is (intentionally) violated by a transaction.
+
+Also very simple: layer two, because you just take some money over and no problem. Hydra..
+
+every token is a Cardano native token. Value: Map of AssetClass, where currencySymbol is the hash of the MintingPolicy, Ada just one of them with empty currency symbol. that means, no minting policy and so Ada can never be minted..
+
+Lack of global state as a strength comes with some limitations:
+
+the lack of global state has some limitations: Problem with valuesPaid == valuesToPay could also have been solved by not allowing two payments by the same PubKey. But then, a validator only sees the context, which is basically just everything involved in this transaction. One way to solve it would be to work with NFTs, but maybe exaggerated in this context..
+
+make sure that Reservations are not too big, didn't know how to do this in the ReserveValidation. So need a mechanism in the Swap Validation: Filter out the ones that are too big..
+
+
+
+
+
+
+
+
+
+
+Swap Schema: To consume ReservesUtxo, UniswapToken must be present in the transaction, to consume that, all ReserveUtxos must be present. Otherwise no restriction: Everyone can make the transaction an gets the fees.  
+problem with this aproach: batcher can decide wether to include an order or not, opens the door to mev known from Ethereum (buy token A first, then execute only buy orders for token A, then sell token A). To solve this, Meld proposed a very elegant solution: Make a fixed number of Reservation utxos, and make sure that they are all in the transaction. This is the main logic of perdex, and the validator logic makes sure that the execution of the swap is completely deterministic.there is no order in which the swap is used, but only the difference between A and B gets swapped, the rest uses the preexisting exchange rate of the liquidity pool.
+
+
+
+
+
+
+
+\paragraph{Implementation}
+\paragraph{Validation}
+
+For a software project, the report often has just three chapters:
+\begin{enumerate}
+\item Design;
+\item Implementation;
+\item Validation.
+\end{enumerate}
+
+
+\paragraph{Theoretical projects.}
+
+A report for a theoretical project should correspond to the organization of
+the material.
+
+
+Here is an example for how to specify an algorithm in pseudo-code.
+
+% These macros are only used for the pseudo-code example
+\newcommand{\str}[1]{\textsc{#1}}
+\newcommand{\var}[1]{\textit{#1}}
+\newcommand{\op}[1]{\textsl{#1}}
+\def \ifempty#1{\def\temp{#1} \ifx\temp\empty }
+\newcommand{\msg}[2]{\ensuremath{\ifempty{#2} [\str{#1}] \else [\str{#1}, {#2}] \fi}}
+\newcommand{\tup}[1]{\ensuremath{\langle #1 \rangle}}
+\newcommand{\nil}{\ensuremath{\bot}}
+\newcommand{\false}{\textsc{false}\xspace}
+\newcommand{\true}{\textsc{true}\xspace}
+
+\newcommand\lastts{\var{lastts}\xspace}
+\newcommand\nextts{\var{nextts}\xspace}
+\newcommand\trusted{\var{trusted}\xspace}
+\newcommand\newepoch{\var{newepoch}\xspace}
+\newcommand\leader{\var{leader}\xspace}
+\newcommand\ts{\var{ts}\xspace}
+\newcommand{\CK}{\ensuremath{\mathcal{K}}\xspace}
+\newcommand{\CP}{\ensuremath{\mathcal{P}}\xspace}
+\newcommand{\CQ}{\ensuremath{\mathcal{Q}}\xspace}
+
+
+\begin{algo*}
+  \vbox{
+    \small
+    \begin{numbertabbing}
+      xxxx\=xxxx\=xxxx\=xxxx\=xxxx\=xxxx\=MMMMMMMMMMMMMMMMMMM\=\kill
+      \textbf{State} \label{}\\
+      \> \(\lastts \gets 0\): most recently started epoch \label{}\\
+      \> \(\nextts \gets 0\): timestamp of the next epoch \label{}\\
+      \> \(\newepoch \gets \msg{\nil}{}^n\): list of \str{newepoch} messages\label{}\\
+      \\
+      \textbf{upon event} \(\op{complain}(p_{\ell})\) \textbf{such that} \( p_{\ell} = \leader(\lastts)\)  \textbf{do} \label{}\\  
+      \> \textbf{if} \(\nextts = \lastts\) \textbf{then}\label{}\\
+      \> \> \(\nextts \gets \lastts + 1\) \label{}\\
+      \> \> send message \(\msg{\str{newepoch}}{\nextts}\) to all \(p_j \in \mathcal{P}\) \label{}\\
+      \\
+      \textbf{upon} receiving a message
+      \(\msg{\str{newepoch}}{\ts}\)  from $p_j$
+      \textbf{such that}  \(\ts = \lastts + 1 \) \textbf{do} \label{}\\
+      \> \(\newepoch[j] \gets \str{newepoch}\) \label{}\\
+      \\
+      \textbf{upon exists} \(\ts\) \textbf{such that} \(\{ p_j \in \CP |~\newepoch[j] = \ts \} \in \CK_i\) \textbf{and} \(\nextts = \lastts\) \textbf{do} \label{}\\
+      \> \(\nextts \gets \lastts + 1\) \label{}\\
+      \> send message \(\msg{\str{newepoch}}{\nextts}\) to all \(p_j \in \CP\) \label{}\\
+      \\
+      \textbf{upon exists} \(\ts\) \textbf{such that} \(\{ p_j \in \CP |~\newepoch[j] = \ts \} \in \CQ_i\) \textbf{and} \(\nextts > \lastts\) \textbf{do} \label{}\\
+      \> \(\lastts \gets \nextts\) \label{}\\
+      \> \(\newepoch \gets [\nil]^n\)\label{}\\
+      \> \textbf{output} \(\op{startepoch}(\lastts, \leader(\lastts))\) \label{}
+    \end{numbertabbing}
+  }
+  \caption{Byzantine Leader-Based Epoch-Change (process $p_i$).}
+  \label{alg:epoch-change}
+\end{algo*}
+
+
+\chapter{Conclusion}
+\label{ch:conclusion}
+
+The conclusion looks back at the entire work, gives a critical look,
+summarizes, and discusses extensions and future work.
+
+
+\appendix
+\chapter{Extra material}
+\label{app:extra}
+
+Extra material may be placed in an appendix that appears after the conclusion.
+
+
+% The bibliography appears after any appendix.
+
+
+% remove this again once you understand citations
+\nocite{*}
+
+% using BiBTeX is required
+\bibliography{thesis}
+
+% any bibstyle is fine, this one give particularly compact output 
+\bibliographystyle{ieeesort}
+
+% mandatory declaration of origin, this must be the last page
+\chapter*{Erklärung}
+
+\emph{Erklärung gemäss Art.~30 RSL Phil.-nat. 18}
+
+\vspace*{1cm}
+
+\noindent
+Ich erkläre hiermit, dass ich diese Arbeit selbstständig verfasst und keine
+anderen als die angegebenen Quellen benutzt habe. Alle Stellen, die
+wörtlich oder sinngemäss aus Quellen entnommen wurden, habe ich als solche
+gekennzeichnet. Mir ist bekannt, dass andernfalls der Senat gemäss Artikel
+36 Absatz 1 Buchstabe r des Gesetzes vom 5. September 1996 über die
+Universität zum Entzug des auf Grund dieser Arbeit verliehenen Titels
+berechtigt ist.
+
+\vspace*{1cm}
+
+\noindent
+Für die Zwecke der Begutachtung und der Überprüfung der Einhaltung der
+Selbständigkeitserklärung bzw.  der Reglemente betreffend Plagiate erteile
+ich der Universität Bern das Recht, die dazu erforderlichen Personendaten
+zu bearbeiten und Nutzungshandlungen vorzunehmen, insbesondere die
+schriftliche Arbeit zu vervielfältigen und dauerhaft in einer Datenbank zu
+speichern sowie diese zur Überprüfung von Arbeiten Dritter zu verwenden
+oder hierzu zur Verfügung zu stellen.
+
+\vspace*{5cm}
+
+\par\noindent\makebox[6cm]{\hrulefill}   \hfill\makebox[8cm]{\hrulefill}
+\par\noindent\makebox[6cm][l]{Ort/Datum} \hfill\makebox[8cm][l]{Unterschrift}
+
+\end{document}
